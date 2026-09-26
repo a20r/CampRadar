@@ -1,0 +1,131 @@
+<title>Loo Runner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Michroma&family=Rajdhani:wght@500;600;700&family=Share+Tech+Mono&display=swap">
+<style>
+:root{
+  --void:#04060c; --water:#071022; --panel:rgba(5,10,20,.90);
+  --cyan:#33e6ff; --cyan-2:#a9f4ff; --cyan-dim:#1a7f95;
+  --magenta:#ff2fd6; --amber:#ffa62b; --red:#ff3b5c; --mint:#5dffc0;
+  --text:#d9f7ff; --dim:#6f9fb3; --line:rgba(51,230,255,.30);
+  --display:'Michroma',system-ui,sans-serif;
+  --mono:'Share Tech Mono',ui-monospace,Menlo,Consolas,monospace;
+  --body:'Rajdhani',system-ui,sans-serif;
+  --sat:env(safe-area-inset-top,0px); --sab:env(safe-area-inset-bottom,0px);
+  color-scheme:dark;
+}
+html,body{height:100%;margin:0;padding:0;background:var(--void);color:var(--text);font-family:var(--body);overflow:hidden;overscroll-behavior:none;-webkit-text-size-adjust:100%}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer;-webkit-tap-highlight-color:transparent}
+button:focus-visible,a:focus-visible{outline:2px solid var(--cyan);outline-offset:3px}
+#app{position:fixed;inset:0;overflow:hidden;background:var(--void)}
+#stage{position:absolute;inset:0;touch-action:none;user-select:none;-webkit-user-select:none;cursor:grab}
+#stage.pin{cursor:crosshair}
+#stage.pan{cursor:grabbing}
+#stage canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+#fx{pointer-events:none}
+.scan{position:absolute;inset:0;pointer-events:none;z-index:2;background:repeating-linear-gradient(0deg,rgba(0,0,0,.26) 0 1px,transparent 1px 3px);opacity:.8}
+.vig{position:absolute;inset:0;pointer-events:none;z-index:2;background:radial-gradient(ellipse at 50% 42%,transparent 40%,rgba(2,4,10,.78) 100%)}
+
+/* ---------- HUD ---------- */
+.hud{position:absolute;left:0;right:0;top:0;z-index:5;padding:calc(var(--sat) + 10px) 14px 10px;pointer-events:none;
+  background:linear-gradient(180deg,rgba(4,6,12,.94) 0%,rgba(4,6,12,.72) 70%,rgba(4,6,12,0) 100%)}
+.hud-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.brand{position:relative;padding-left:12px}
+.brand::before{content:"";position:absolute;left:0;top:2px;bottom:2px;width:3px;background:var(--cyan);box-shadow:0 0 10px var(--cyan)}
+.title{font-family:var(--display);font-size:19px;letter-spacing:.22em;color:#fff;line-height:1;
+  text-shadow:0 0 6px var(--cyan),0 0 18px rgba(51,230,255,.6);animation:flicker 9s infinite}
+.title b{color:var(--magenta);font-weight:400;text-shadow:0 0 6px var(--magenta),0 0 18px rgba(255,47,214,.5)}
+.sub{margin-top:6px;font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--dim);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.sub .jp{color:var(--magenta);letter-spacing:.35em;font-family:system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;text-shadow:0 0 8px rgba(255,47,214,.7)}
+.clock{text-align:right;font-family:var(--mono);font-size:12px;color:var(--cyan-2);letter-spacing:.12em;white-space:nowrap;font-variant-numeric:tabular-nums}
+.clock small{display:block;font-size:9px;color:var(--dim);letter-spacing:.25em;margin-top:3px}
+.readout{margin-top:10px;display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:var(--cyan-2);text-transform:uppercase;min-height:14px}
+.led{width:8px;height:8px;background:var(--mint);box-shadow:0 0 8px var(--mint);flex:none;animation:blink 1.6s steps(2,start) infinite}
+.led.busy{background:var(--amber);box-shadow:0 0 8px var(--amber);animation-duration:.4s}
+.led.lock{background:var(--magenta);box-shadow:0 0 8px var(--magenta);animation:none}
+.coords{margin-top:4px;font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--dim);font-variant-numeric:tabular-nums}
+@keyframes blink{50%{opacity:.25}}
+@keyframes flicker{0%,93%,100%{opacity:1}94%{opacity:.55}95%{opacity:1}97%{opacity:.7}98%{opacity:1}}
+
+/* ---------- chips ---------- */
+.chips{position:absolute;left:14px;right:14px;z-index:5;display:flex;gap:6px;flex-wrap:wrap;pointer-events:none}
+.chip{pointer-events:auto;font-family:var(--mono);font-size:10px;letter-spacing:.14em;padding:7px 10px;color:var(--dim);
+  background:rgba(5,10,20,.82);border:1px solid rgba(111,159,179,.35);clip-path:polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px);transition:color .2s,border-color .2s,background .2s}
+.chip.on{color:#041017;background:var(--cyan);border-color:var(--cyan);box-shadow:0 0 12px rgba(51,230,255,.45)}
+.chip.mag.on{background:var(--magenta);border-color:var(--magenta);box-shadow:0 0 12px rgba(255,47,214,.5);color:#fff}
+.legend{position:absolute;left:14px;z-index:5;font-family:var(--mono);font-size:9px;letter-spacing:.12em;color:var(--dim);display:flex;gap:10px;pointer-events:none}
+.legend i{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;vertical-align:1px}
+
+/* ---------- neon side sign ---------- */
+.sign{position:absolute;right:8px;top:50%;transform:translateY(-50%);z-index:3;pointer-events:none;
+  writing-mode:vertical-rl;font-family:system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;font-size:22px;letter-spacing:.5em;color:#ffd0f5;
+  text-shadow:0 0 6px var(--magenta),0 0 16px var(--magenta),0 0 34px rgba(255,47,214,.6);opacity:.85;animation:signflick 7s infinite}
+.sign span{color:var(--cyan-2);text-shadow:0 0 6px var(--cyan),0 0 16px var(--cyan)}
+@keyframes signflick{0%,71%,100%{opacity:.85}72%{opacity:.3}73%{opacity:.85}88%{opacity:.85}89%{opacity:.5}90%{opacity:.85}}
+
+/* ---------- FAB ---------- */
+.fab{position:absolute;left:50%;bottom:calc(var(--sab) + 22px);z-index:6;transform:translateX(-50%);
+  width:min(320px,calc(100% - 48px));height:62px;display:flex;align-items:center;justify-content:center;gap:12px;
+  font-family:var(--display);font-size:13px;letter-spacing:.2em;color:#041017;background:var(--cyan);
+  clip-path:polygon(14px 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%,0 14px);
+  box-shadow:0 0 18px rgba(51,230,255,.55),0 0 60px rgba(51,230,255,.25);transition:transform .35s cubic-bezier(.2,.9,.3,1.2),opacity .3s}
+.fab svg{width:22px;height:22px;flex:none}
+.fab::after{content:"";position:absolute;inset:-1px;border:2px solid var(--cyan);clip-path:inherit;opacity:0;animation:fabpulse 2.4s ease-out infinite}
+@keyframes fabpulse{0%{transform:scale(1);opacity:.7}100%{transform:scale(1.18,1.6);opacity:0}}
+.fab-halo{position:absolute;left:50%;bottom:calc(var(--sab) + 22px);z-index:5;transform:translateX(-50%);width:min(320px,calc(100% - 48px));height:62px;pointer-events:none}
+.fab-halo::before,.fab-halo::after{content:"";position:absolute;inset:-6px;border:1px solid rgba(51,230,255,.5);clip-path:polygon(18px 0,100% 0,100% calc(100% - 18px),calc(100% - 18px) 100%,0 100%,0 18px);animation:halo 2.4s ease-out infinite}
+.fab-halo::after{animation-delay:1.2s}
+@keyframes halo{0%{transform:scale(1);opacity:.8}100%{transform:scale(1.25,1.9);opacity:0}}
+.busy .fab,.busy .fab-halo,.card-open .fab,.card-open .fab-halo{transform:translate(-50%,180px);opacity:0;pointer-events:none}
+
+/* ---------- result card ---------- */
+.card{position:absolute;left:50%;bottom:0;z-index:7;width:min(560px,100%);transform:translate(-50%,110%);transition:transform .45s cubic-bezier(.2,.9,.25,1);
+  background:var(--panel);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-top:1px solid var(--line);
+  padding:14px 16px calc(var(--sab) + 16px);clip-path:polygon(0 0,calc(100% - 26px) 0,100% 26px,100% 100%,0 100%)}
+.card::before{content:"";position:absolute;left:0;top:0;width:44%;height:2px;background:var(--magenta);box-shadow:0 0 10px var(--magenta)}
+.card.show{transform:translate(-50%,0)}
+.card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.eyebrow{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--dim);text-transform:uppercase}
+.pill{font-family:var(--mono);font-size:10px;letter-spacing:.14em;padding:4px 8px;border:1px solid currentColor;white-space:nowrap;text-transform:uppercase}
+.pill.open{color:var(--mint)}.pill.closed{color:var(--red)}.pill.restricted{color:var(--amber)}.pill.unverified{color:var(--cyan-dim)}
+.close{position:absolute;right:10px;top:34px;width:34px;height:34px;display:grid;place-items:center;color:var(--dim);font-family:var(--mono);font-size:16px}
+.name{margin-top:6px;font-weight:700;font-size:22px;line-height:1.1;letter-spacing:.01em;color:#fff;text-wrap:balance;padding-right:40px}
+.meta{margin-top:8px;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+.dist{font-family:var(--display);font-size:20px;color:var(--cyan);text-shadow:0 0 10px rgba(51,230,255,.6);font-variant-numeric:tabular-nums}
+.walk{font-family:var(--mono);font-size:11px;letter-spacing:.16em;color:var(--dim);text-transform:uppercase}
+.rows{margin-top:10px;display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:15px;font-weight:500;color:var(--text);line-height:1.3}
+.rows b{font-family:var(--mono);font-weight:400;font-size:10px;letter-spacing:.16em;color:var(--dim);text-transform:uppercase;padding-top:3px}
+.rows .warn{color:var(--amber)}
+.actions{margin-top:14px;display:flex;gap:8px;align-items:stretch}
+.btn{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;height:48px;font-family:var(--display);font-size:11px;letter-spacing:.18em;text-decoration:none;
+  clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px)}
+.btn.primary{background:var(--magenta);color:#fff;box-shadow:0 0 16px rgba(255,47,214,.5);flex:2}
+.btn.ghost{color:var(--cyan);border:1px solid var(--line);background:rgba(51,230,255,.06)}
+.btn svg{width:16px;height:16px}
+.srcline{margin-top:10px;font-family:var(--mono);font-size:9px;letter-spacing:.12em;color:var(--dim);text-transform:uppercase;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.srcline a{color:var(--cyan-dim)}
+
+/* ---------- overlay (acquire / errors) ---------- */
+.overlay{position:absolute;inset:0;z-index:8;pointer-events:none;opacity:0;transition:opacity .25s;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;padding:0 20px calc(var(--sab) + 30px)}
+.overlay.show{opacity:1}
+.overlay.actions{pointer-events:auto;background:rgba(4,6,12,.55)}
+.ov-box{width:min(420px,100%);font-family:var(--mono);color:var(--cyan-2);text-transform:uppercase;letter-spacing:.14em}
+.ov-title{font-family:var(--display);font-size:15px;letter-spacing:.24em;color:#fff;text-shadow:0 0 10px var(--cyan);margin-bottom:6px}
+.ov-jp{font-family:system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;font-size:11px;letter-spacing:.4em;color:var(--magenta);margin-bottom:12px}
+.ov-lines{font-size:11px;line-height:1.7;white-space:pre;font-variant-numeric:tabular-nums;min-height:5.1em}
+.ov-skip{margin-top:12px;font-size:9px;letter-spacing:.3em;color:var(--dim)}
+.ov-actions{display:none;margin-top:14px;gap:8px;flex-direction:column}
+.overlay.actions .ov-actions{display:flex}
+.ov-actions .err{color:var(--amber);font-size:11px;line-height:1.5;margin-bottom:4px;text-transform:none;letter-spacing:.08em;font-family:var(--body);font-size:15px;font-weight:600}
+.ov-actions button{height:46px;font-family:var(--display);font-size:11px;letter-spacing:.18em;color:var(--cyan);border:1px solid var(--line);background:rgba(5,10,20,.9);
+  clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px)}
+.ov-actions button.primary{background:var(--cyan);color:#041017;border-color:var(--cyan)}
+
+.flash{position:absolute;inset:0;z-index:4;pointer-events:none;background:#bff6ff;opacity:0;mix-blend-mode:screen}
+.glitch{animation:glitch .16s steps(2,end) 1}
+@keyframes glitch{0%{transform:translate(2px,0) skewX(1deg);filter:hue-rotate(40deg)}50%{transform:translate(-3px,1px);filter:hue-rotate(-60deg)}100%{transform:none;filter:none}}
+@media (prefers-reduced-motion:reduce){.title,.sign,.fab::after,.fab-halo::before,.fab-halo::after,.led{animation:none}.glitch{animation:none}}
+@media (max-height:640px){.sign{display:none}.name{font-size:19px}.rows{font-size:14px}}
+</style>
