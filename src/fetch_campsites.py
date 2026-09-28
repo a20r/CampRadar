@@ -23,7 +23,9 @@ PARK_FILTER = """(wr["boundary"="protected_area"];wr["boundary"="national_park"]
 wr["leisure"="park"]["name"~"State (Park|Forest|Recreation|Beach)|National (Forest|Park|Recreation|Seashore|Lakeshore|Grassland|Monument|Preserve)|County Park|Regional Park|State Game|Wildlife (Area|Management|Refuge)",i];
 wr["landuse"="forest"]["name"~"State Forest|National Forest",i];);
 out tags bb;"""
-PARK_REGIONS = {"conus": "24,-125,50,-66", "ak": "51,-180,72,-129", "hi": "18,-161,23,-154", "pr": "17,-68,19,-64"}
+# CONUS is tiled so no single request exceeds what the public mirrors allow
+PARK_REGIONS = {f"conus_{la}_{lo}": f"{la},{lo},{min(la + 9, 50)},{min(lo + 12, -66)}" for la in range(24, 50, 9) for lo in range(-125, -66, 12)}
+PARK_REGIONS.update({"ak": "51,-180,72,-129", "hi": "18,-161,23,-154", "pr": "17,-68,19,-64"})
 
 def overpass(query, path):
     if os.path.exists(path): return json.load(open(path, encoding="utf-8"))
@@ -42,9 +44,10 @@ def overpass(query, path):
     raise SystemExit(f"Overpass failed: {last}")
 
 raw = overpass(CAMP_QUERY, os.path.join(here, "campsites_raw.json"))
-parks = []
+parks, seen = [], set()
 for region, bbox in PARK_REGIONS.items():
-    parks += overpass(f"[out:json][timeout:900][bbox:{bbox}];\n{PARK_FILTER}", os.path.join(here, f"parks_{region}.json")).get("elements", [])
+    for el in overpass(f"[out:json][timeout:600][bbox:{bbox}];\n{PARK_FILTER}", os.path.join(here, f"parks_{region}.json")).get("elements", []):
+        if (el["type"], el["id"]) not in seen: seen.add((el["type"], el["id"])); parks.append(el)
 
 FEDERAL = re.compile(r"national (park|forest|monument|recreation|wildlife|seashore|lakeshore|grassland|preserve|scenic|historic|battlefield)|\bnps\b|park service|forest service|\busfs\b|\bus forest|u\.?s\.? forest|bureau of land|\bblm\b|army corps|corps of engineers|\busace\b|fish (and|&) wildlife|\bfws\b|bureau of reclamation|\busbr\b|tennessee valley|\btva\b|federal|department of the interior|\bdoi\b|national|united states", re.I)
 STATE = re.compile(r"state (park|forest|recreation|wildlife|game|fish|beach|historic|trust|lands?|natural|scenic)|\bdcr\b|conservation and recreation|conservation & recreation|department of natural resources|\bdnr\b|dept\.? of natural|parks (and|&) (recreation|wildlife)|fish (and|&) game|\bdec\b|department of environmental|state of \w+|commonwealth of|\b(california|texas|florida|new york|pennsylvania|illinois|ohio|georgia|north carolina|michigan|new jersey|virginia|washington|arizona|massachusetts|tennessee|indiana|maryland|missouri|wisconsin|colorado|minnesota|south carolina|alabama|louisiana|kentucky|oregon|oklahoma|connecticut|utah|iowa|nevada|arkansas|mississippi|kansas|new mexico|nebraska|idaho|west virginia|hawaii|new hampshire|maine|montana|rhode island|delaware|south dakota|north dakota|alaska|vermont|wyoming) (state|department|dept|division|parks)", re.I)
