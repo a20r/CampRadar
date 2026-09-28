@@ -514,10 +514,13 @@ function fillCard(quiet) {
   if (t.w && t.w !== 'None') rows.push(['ACCESSIBLE', esc(t.w)]);
   if (t.t) rows.push(['TYPE', esc(t.t)]);
   if (t.ex) for (const [k, v] of t.ex) rows.push([esc(k), esc(v)]);
-  $('cRows').innerHTML = rows.slice(0, 9).map(([k, v]) => `<b>${k}</b><span>${v}</span>`).join('');
+  $('cRows').innerHTML = rows.slice(0, 12).map(([k, v]) => `<b>${k}</b><span>${v}</span>`).join('');
   $('btnNav').href = `https://www.google.com/maps/dir/?api=1&destination=${t.la},${t.lo}&travelmode=walking`;
   $('cSrc').textContent = `${(t.src || DS.name).toUpperCase().slice(0, 44)} · ${t.la.toFixed(5)}, ${t.lo.toFixed(5)}`;
   const link = $('cLink'); if (t.u) { link.href = t.u; link.hidden = false; } else link.hidden = true;
+  // web search for the unit: name plus whatever context the record has (park, operator, address)
+  const ctx = (t.ex || []).filter(([k]) => /PARK|OPERATOR|CITY|BOROUGH|COUNTY|STATE/.test(k)).map(([, v]) => v);
+  $('cSearch').href = 'https://www.google.com/search?q=' + encodeURIComponent([t.n, t.ad, ...ctx].filter(Boolean).slice(0, 3).join(' '));
   $('btnNext').hidden = !(user && ranked.length > 1);
   if (user && has && !quiet) setStatus(far ? `OUTSIDE THE GRID · NEAREST ${fmtDist(t.dist)}` : `ROUTE READY · ${fmtDist(t.dist)} · ${fmtWalk(t.dist)}`, 'lock');
   updateCoordsIdle();
