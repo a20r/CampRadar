@@ -26,7 +26,7 @@ page = f"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="theme-color" content="#04060c">
-<meta name="description" content="Find the closest public toilet, in any city. Drop in your own GeoJSON, CSV, GPX or KML and Loo Runner keeps it in your browser and routes you to the nearest one. Ships with 614 Toronto washrooms.">
+<meta name="description" content="Find the closest campsite. Every federal, state, county and private campsite in the US, on a neon radar map. Drop in your own GeoJSON, CSV, GPX or KML for any city and Camp Radar keeps it in your browser and routes you to the nearest one.">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 {head}

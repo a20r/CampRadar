@@ -17,7 +17,7 @@ out center tags;"""
 
 if not os.path.exists(RAW):
     req = urllib.request.Request("https://overpass-api.de/api/interpreter", data=urllib.parse.urlencode({"data": QUERY}).encode(),
-                                 headers={"User-Agent": "loo-runner/1.0 (github.com/a20r/loo-runner)", "Accept": "application/json"})
+                                 headers={"User-Agent": "camp-radar/1.0 (github.com/a20r/camp-radar)", "Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=1200) as r, open(RAW, "wb") as f:
         f.write(r.read())
 raw = json.load(open(RAW, encoding="utf-8"))

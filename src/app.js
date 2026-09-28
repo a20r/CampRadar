@@ -580,7 +580,7 @@ function runWithPosition(lat, lon, acc, manual) {
 
 /* ---------------- local storage (IndexedDB, localStorage fallback) ---------------- */
 const store = (() => {
-  const DBN = 'loo-runner', ST = 'kv';
+  const DBN = 'camp-radar', ST = 'kv';
   let dbp = null;
   function open() {
     if (dbp) return dbp;
@@ -594,7 +594,7 @@ const store = (() => {
     const t = db.transaction(ST, mode), q = fn(t.objectStore(ST));
     t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error || new Error('aborted'));
   }));
-  const LS = 'loo:';
+  const LS = 'campradar:';
   const ls = {
     get: k => { try { const v = localStorage.getItem(LS + k); return Promise.resolve(v ? JSON.parse(v) : undefined); } catch (e) { return Promise.resolve(undefined); } },
     set: (k, v) => { try { localStorage.setItem(LS + k, JSON.stringify(v)); return Promise.resolve(); } catch (e) { return Promise.reject(e); } },
@@ -622,7 +622,7 @@ function applyDataset(ds, fit) {
   $('chipPublic').hidden = !ds.fields.access; $('chipPublic').classList.remove('on'); $('chipPublic').setAttribute('aria-pressed', 'false');
   buildLegend(ds.fields);
   $('subName').textContent = `${ds.name.toUpperCase().slice(0, 26)} · ${U.length} UNITS`;
-  document.title = ds.sample ? 'Loo Runner' : `Loo Runner · ${ds.name}`;
+  document.title = ds.sample ? 'Camp Radar' : `Camp Radar · ${ds.name}`;
   layoutChrome();
   if (fit) {
     const a = proj(minLo, maxLa), b = proj(maxLo, minLa);
@@ -780,8 +780,8 @@ store.get('dataset').then(saved => {
   else return loadDefault();
 }).catch(() => loadDefault()).then(() => {
   if (srcParam && /^https?:\/\//i.test(srcParam)) loadFromURL(srcParam);
-  else if (!srcParam && DS && DS.sample && !sessionStorage.getItem('loo:hinted')) {
-    try { sessionStorage.setItem('loo:hinted', '1'); } catch (e) { /* ignore */ }
+  else if (!srcParam && DS && DS.sample && !sessionStorage.getItem('campradar:hinted')) {
+    try { sessionStorage.setItem('campradar:hinted', '1'); } catch (e) { /* ignore */ }
     setTimeout(() => { if (!busy()) setStatus('DEFAULT GRID · TAP DATA FOR YOUR OWN'); }, 2600);
   }
 });
