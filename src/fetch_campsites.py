@@ -27,10 +27,10 @@ out tags bb;"""
 PARK_REGIONS = {f"conus_{la}_{lo}": f"{la},{lo},{min(la + 9, 50)},{min(lo + 12, -66)}" for la in range(24, 50, 9) for lo in range(-125, -66, 12)}
 PARK_REGIONS.update({"ak": "51,-180,72,-129", "hi": "18,-161,23,-154", "pr": "17,-68,19,-64"})
 
-def overpass(query, path):
+def overpass(query, path, attempts=6):
     if os.path.exists(path): return json.load(open(path, encoding="utf-8"))
     last = None
-    for attempt in range(6):
+    for attempt in range(attempts):
         url = MIRRORS[attempt % len(MIRRORS)]
         try:
             req = urllib.request.Request(url, data=urllib.parse.urlencode({"data": query}).encode(), headers={"User-Agent": UA, "Accept": "application/json"})
@@ -41,12 +41,26 @@ def overpass(query, path):
             return data
         except Exception as e:  # noqa: BLE001 - any mirror failure just moves to the next one
             last = e; print(f"  {url}: {e}", file=sys.stderr); time.sleep(10 * (attempt + 1))
-    raise SystemExit(f"Overpass failed: {last}")
+    raise RuntimeError(f"Overpass failed: {last}")
+
+def park_tile(bbox, name):
+    """Fetch one parks tile; if the mirrors keep refusing it, split it into quadrants and try those."""
+    try:
+        return overpass(f"[out:json][timeout:600][bbox:{bbox}];\n{PARK_FILTER}", os.path.join(here, f"parks_{name}.json"), attempts=4).get("elements", [])
+    except RuntimeError as e:
+        s, w, n, e_ = map(float, bbox.split(","))
+        if n - s < 2 and e_ - w < 2: raise
+        print(f"  splitting {name}: {e}", file=sys.stderr)
+        mid_la, mid_lo = (s + n) / 2, (w + e_) / 2
+        out = []
+        for i, (la0, lo0, la1, lo1) in enumerate([(s, w, mid_la, mid_lo), (s, mid_lo, mid_la, e_), (mid_la, w, n, mid_lo), (mid_la, mid_lo, n, e_)]):
+            out += park_tile(f"{la0},{lo0},{la1},{lo1}", f"{name}_q{i}")
+        return out
 
 raw = overpass(CAMP_QUERY, os.path.join(here, "campsites_raw.json"))
 parks, seen = [], set()
 for region, bbox in PARK_REGIONS.items():
-    for el in overpass(f"[out:json][timeout:600][bbox:{bbox}];\n{PARK_FILTER}", os.path.join(here, f"parks_{region}.json")).get("elements", []):
+    for el in park_tile(bbox, region):
         if (el["type"], el["id"]) not in seen: seen.add((el["type"], el["id"])); parks.append(el)
 
 FEDERAL = re.compile(r"national (park|forest|monument|recreation|wildlife|seashore|lakeshore|grassland|preserve|scenic|historic|battlefield)|\bnps\b|park service|forest service|\busfs\b|\bus forest|u\.?s\.? forest|bureau of land|\bblm\b|army corps|corps of engineers|\busace\b|fish (and|&) wildlife|\bfws\b|bureau of reclamation|\busbr\b|tennessee valley|\btva\b|federal|department of the interior|\bdoi\b|national|united states", re.I)
