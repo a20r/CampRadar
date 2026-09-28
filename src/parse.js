@@ -122,7 +122,7 @@ function normaliseProps(rawProps, idx) {
     if (e.nk === 'type' && /^(node|way|relation|feature)$/i.test(String(v))) continue;
     const s = String(v); if (s.length > 140 || /^[{\[]/.test(s)) continue;
     extra.push([e.k.replace(/[_:]+/g, ' ').toUpperCase().slice(0, 18), s]);
-    if (extra.length >= 5) break;
+    if (extra.length >= 8) break;
   }
   if (extra.length) p.ex = extra;
   if (!p.n) p.n = p.t ? cap(p.t) : p.ad ? p.ad : `Unit ${String(idx + 1).padStart(3, '0')}`;
