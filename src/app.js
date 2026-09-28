@@ -1,75 +1,43 @@
 (function () {
 'use strict';
-const D = window.MAPDATA;
 const TAU = Math.PI * 2;
 const $ = id => document.getElementById(id);
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const Parse = window.LooParse;
 
-/* ---------------- projection (Web Mercator, local origin at Toronto) ---------------- */
+/* ---------------- projection (Web Mercator, world units 0..1) ---------------- */
 const lonToX = lon => (lon + 180) / 360;
 const latToY = lat => { const s = Math.sin(lat * Math.PI / 180); return 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI); };
-const X0 = lonToX(-79.39), Y0 = latToY(43.70);
-const proj = (lon, lat) => [lonToX(lon) - X0, latToY(lat) - Y0];
-const unproj = (x, y) => [(x + X0) * 360 - 180, Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + Y0)))) * 180 / Math.PI];
-const M_PER_UNIT = 40075016.686 * Math.cos(43.7 * Math.PI / 180); // ground metres per world unit here
+const proj = (lon, lat) => [lonToX(lon), latToY(lat)];
+const unproj = (x, y) => [x * 360 - 180, Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180 / Math.PI];
+const mpuAt = lat => 40075016.686 * Math.cos(lat * Math.PI / 180); // ground metres per world unit at this latitude
 const hav = (la1, lo1, la2, lo2) => {
   const r = Math.PI / 180, dLa = (la2 - la1) * r, dLo = (lo2 - lo1) * r;
   const a = Math.sin(dLa / 2) ** 2 + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin(dLo / 2) ** 2;
   return 12742000 * Math.asin(Math.sqrt(a));
 };
 
-/* ---------------- decode packed polylines ---------------- */
-function decode(str) {
-  const out = []; let i = 0, x = 0, y = 0;
-  while (i < str.length) {
-    let b, sh = 0, res = 0;
-    do { b = str.charCodeAt(i++) - 63; res |= (b & 31) << sh; sh += 5; } while (b >= 32);
-    y += (res & 1) ? ~(res >> 1) : (res >> 1);
-    sh = 0; res = 0;
-    do { b = str.charCodeAt(i++) - 63; res |= (b & 31) << sh; sh += 5; } while (b >= 32);
-    x += (res & 1) ? ~(res >> 1) : (res >> 1);
-    out.push(x / 1e5, y / 1e5);
-  }
-  return out;
-}
-function toLine(str) {
-  const ll = decode(str), n = ll.length / 2, a = new Float32Array(n * 2);
-  let minx = 1e9, miny = 1e9, maxx = -1e9, maxy = -1e9;
-  for (let i = 0; i < n; i++) {
-    const p = proj(ll[2 * i], ll[2 * i + 1]);
-    a[2 * i] = p[0]; a[2 * i + 1] = p[1];
-    if (p[0] < minx) minx = p[0]; if (p[0] > maxx) maxx = p[0];
-    if (p[1] < miny) miny = p[1]; if (p[1] > maxy) maxy = p[1];
-  }
-  return { a, minx, miny, maxx, maxy };
-}
-const L = { roads: {}, water: [], rail: [], tram: [], subway: [], boundary: null, places: [], toilets: [] };
-for (const k in D.roads) L.roads[k] = D.roads[k].map(toLine);
-L.water = D.water.map(rings => rings.map(toLine));
-L.rail = D.rail.map(toLine); L.tram = D.tram.map(toLine);
-L.subway = D.subway.map(s => Object.assign(toLine(s.p), { name: s.n }));
-L.boundary = toLine(D.boundary);
-L.places = D.places.map(p => { const q = proj(p[0], p[1]); return { x: q[0], y: q[1], name: p[2].toUpperCase() }; });
-L.toilets = D.toilets.map((t, i) => { const q = proj(t.lo, t.la); return Object.assign({ i, x: q[0], y: q[1], dist: NaN, cross: 0 }, t); });
-const CN = (() => { const q = proj(-79.3871, 43.6426); return { x: q[0], y: q[1] }; })();
-const N_OPEN = L.toilets.filter(t => t.s === 1).length;
+/* ---------------- dataset state ---------------- */
+let DS = null;   // {name, format, points, fields, bbox, nOpen, notes, sample, saved}
+let U = [];      // units on the map: points plus x, y, dist, cross
+let center = { lat: 43.7, lon: -79.39 };
 
 /* ---------------- colours ---------------- */
 const C = {
-  void: '#04060c', water: '#071022', cyan: '#33e6ff', cyan2: '#a9f4ff', cyanDim: '#1a7f95',
+  void: '#04060c', cyan: '#33e6ff', cyan2: '#a9f4ff', cyanDim: '#1a7f95',
   magenta: '#ff2fd6', amber: '#ffa62b', red: '#ff3b5c', mint: '#5dffc0', dim: '#6f9fb3'
 };
 const FONT_MONO = "'Share Tech Mono', ui-monospace, Menlo, Consolas, monospace";
-const FONT_DISP = "'Michroma', system-ui, sans-serif";
 
 /* ---------------- canvas + view ---------------- */
 const stage = $('stage'), map = $('map'), fx = $('fx');
 const mctx = map.getContext('2d'), fctx = fx.getContext('2d');
 let W = 0, H = 0, dpr = 1, dirty = true;
-const view = { cx: 0, cy: 0, z: 11 };
-const ZMIN = 9.6, ZMAX = 17;
+const view = { cx: 0.5, cy: 0.5, z: 11 };
+const ZMIN = 2.5, ZMAX = 19;
 const scale = z => 256 * Math.pow(2, z);
-const mpp = () => M_PER_UNIT / scale(view.z); // metres per screen pixel
+const mpu = () => mpuAt(unproj(view.cx, view.cy)[1]);
+const mpp = () => mpu() / scale(view.z); // metres per screen pixel
 const toScreen = (x, y) => { const S = scale(view.z); return [(x - view.cx) * S + W / 2, (y - view.cy) * S + H / 2]; };
 const toWorld = (sx, sy) => { const S = scale(view.z); return [view.cx + (sx - W / 2) / S, view.cy + (sy - H / 2) / S]; };
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -92,7 +60,7 @@ function layoutChrome() {
 function fitBounds(minx, miny, maxx, maxy, pad) {
   // pad: {l,t,r,b} in px. Returns {cx,cy,z}
   const availW = Math.max(40, W - pad.l - pad.r), availH = Math.max(40, H - pad.t - pad.b);
-  const dx = Math.max(maxx - minx, 1e-6), dy = Math.max(maxy - miny, 1e-6);
+  const dx = Math.max(maxx - minx, 1e-9), dy = Math.max(maxy - miny, 1e-9);
   const S = Math.min(availW / dx, availH / dy);
   const z = clamp(Math.log2(S / 256), ZMIN, 16.2), S2 = scale(z);
   const scx = (pad.l + W - pad.r) / 2, scy = (pad.t + H - pad.b) / 2;
@@ -100,135 +68,114 @@ function fitBounds(minx, miny, maxx, maxy, pad) {
 }
 function hudPad() { return $('hud').offsetHeight + $('chips').offsetHeight + 24; }
 
-/* ---------------- base map ---------------- */
-function pathLine(c, l) { const a = l.a; c.moveTo(a[0], a[1]); for (let i = 2; i < a.length; i += 2) c.lineTo(a[i], a[i + 1]); }
-function lw(base, k, lo, hi) { return clamp(base + (view.z - 11) * k, lo, hi); }
+/* ---------------- raster tiles (Esri dark gray canvas, tinted) ---------------- */
+const TILE_MAX = 16;
+const tiles = new Map();
+let tileGen = 0;
+const tileKey = (z, x, y) => z + '/' + x + '/' + y;
+const tileURL = (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/${z}/${y}/${x}`;
+function getTile(z, x, y) {
+  const k = tileKey(z, x, y);
+  let t = tiles.get(k);
+  if (t) { t.used = tileGen; return t; }
+  t = { img: new Image(), ok: false, used: tileGen };
+  t.img.crossOrigin = 'anonymous';
+  t.img.onload = () => { t.ok = true; dirty = true; };
+  t.img.onerror = () => { t.err = true; };
+  t.img.src = tileURL(z, x, y);
+  tiles.set(k, t);
+  if (tiles.size > 900) {
+    const old = [...tiles.entries()].sort((a, b) => a[1].used - b[1].used).slice(0, 300);
+    for (const [key, tt] of old) { if (!tt.ok) { tt.img.onload = null; tt.img.src = ''; } tiles.delete(key); }
+  }
+  return t;
+}
+function tileRange(v, S) {
+  const zt = clamp(Math.round(v.z), 1, TILE_MAX), n = 1 << zt;
+  const left = v.cx - W / 2 / S, top = v.cy - H / 2 / S, right = v.cx + W / 2 / S, bottom = v.cy + H / 2 / S;
+  return { zt, n, x0: Math.floor(left * n), x1: Math.floor(right * n), y0: Math.max(0, Math.floor(top * n)), y1: Math.min(n - 1, Math.floor(bottom * n)), left, top };
+}
+function prefetchView(v) { // warm the cache for where a fly-to will land
+  const r = tileRange(v, scale(v.z));
+  if ((r.x1 - r.x0 + 1) * (r.y1 - r.y0 + 1) > 120) return;
+  for (let x = r.x0; x <= r.x1; x++) for (let y = r.y0; y <= r.y1; y++) getTile(r.zt, ((x % r.n) + r.n) % r.n, y);
+}
+function drawTiles(c, S) {
+  tileGen++;
+  const r = tileRange(view, S), tw = S / r.n;
+  if ((r.x1 - r.x0 + 1) * (r.y1 - r.y0 + 1) > 400) return;
+  for (let x = r.x0; x <= r.x1; x++) {
+    const xx = ((x % r.n) + r.n) % r.n;
+    for (let y = r.y0; y <= r.y1; y++) {
+      const sx = (x / r.n - r.left) * S, sy = (y / r.n - r.top) * S;
+      const t = getTile(r.zt, xx, y);
+      if (t.ok) { c.drawImage(t.img, sx, sy, tw + .5, tw + .5); continue; }
+      for (let k = 1; k <= 6 && r.zt - k >= 1; k++) { // ancestor fallback while the tile loads
+        const tp = tiles.get(tileKey(r.zt - k, xx >> k, y >> k));
+        if (!tp || !tp.ok) continue;
+        tp.used = tileGen;
+        const f = 1 << k, iw = tp.img.width / f, ih = tp.img.height / f;
+        c.drawImage(tp.img, (xx - ((xx >> k) << k)) * iw, (y - ((y >> k) << k)) * ih, iw, ih, sx, sy, tw + .5, tw + .5);
+        break;
+      }
+    }
+  }
+  // tint the greys toward the grid's cyan
+  c.globalCompositeOperation = 'multiply'; c.fillStyle = '#7fd4ff'; c.fillRect(0, 0, W, H);
+  c.globalCompositeOperation = 'screen'; c.fillStyle = 'rgba(8,20,40,0.55)'; c.fillRect(0, 0, W, H);
+  c.globalCompositeOperation = 'source-over';
+}
 
+/* ---------------- base map ---------------- */
+function lw(base, k, lo, hi) { return clamp(base + (view.z - 11) * k, lo, hi); }
 function drawBase() {
   const S = scale(view.z), z = view.z;
   const left = view.cx - W / 2 / S, top = view.cy - H / 2 / S, right = view.cx + W / 2 / S, bottom = view.cy + H / 2 / S;
-  const vis = l => !(l.maxx < left || l.minx > right || l.maxy < top || l.miny > bottom);
-  const c = mctx, px = 1 / S;
+  const c = mctx;
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
   c.fillStyle = C.void; c.fillRect(0, 0, W, H);
+  drawTiles(c, S);
 
-  // sector grid (1 km at street zoom, 5 km citywide)
-  const gm = z >= 14.6 ? 250 : z >= 12.2 ? 1000 : 5000, g = gm / M_PER_UNIT;
-  c.strokeStyle = 'rgba(51,230,255,0.055)'; c.lineWidth = 1; c.beginPath();
+  // sector grid (100 m at street zoom, up to 1000 km when zoomed right out)
+  const gm = z >= 16.5 ? 100 : z >= 14.6 ? 250 : z >= 12.2 ? 1000 : z >= 9.6 ? 5000 : z >= 7 ? 25000 : z >= 4.5 ? 100000 : 1000000;
+  const g = gm / mpu();
+  c.strokeStyle = 'rgba(51,230,255,0.07)'; c.lineWidth = 1; c.beginPath();
   for (let x = Math.ceil(left / g) * g; x < right; x += g) { const sx = (x - left) * S; c.moveTo(sx, 0); c.lineTo(sx, H); }
   for (let y = Math.ceil(top / g) * g; y < bottom; y += g) { const sy = (y - top) * S; c.moveTo(0, sy); c.lineTo(W, sy); }
   c.stroke();
 
-  c.setTransform(S * dpr, 0, 0, S * dpr, -left * S * dpr, -top * S * dpr);
-  c.lineJoin = 'round'; c.lineCap = 'round';
-
-  // water
-  c.beginPath();
-  for (const poly of L.water) { if (!vis(poly[0])) continue; for (const ring of poly) { pathLine(c, ring); c.closePath(); } }
-  c.fillStyle = C.water; c.fill('evenodd');
-  c.lineWidth = 5 * px; c.strokeStyle = 'rgba(51,230,255,0.10)'; c.stroke();
-  c.lineWidth = 1 * px; c.strokeStyle = 'rgba(51,230,255,0.42)'; c.stroke();
-
-  // city limits
-  c.beginPath(); pathLine(c, L.boundary); c.closePath();
-  c.setLineDash([6 * px, 5 * px]); c.lineWidth = 1 * px; c.strokeStyle = 'rgba(255,47,214,0.45)'; c.stroke(); c.setLineDash([]);
-
-  // rail / streetcar
-  if (z >= 11.2) {
-    c.beginPath(); for (const l of L.rail) if (vis(l)) pathLine(c, l);
-    c.setLineDash([3 * px, 3 * px]); c.lineWidth = lw(.7, .25, .6, 1.6) * px; c.strokeStyle = 'rgba(150,170,200,0.28)'; c.stroke(); c.setLineDash([]);
-  }
-  if (z >= 12.6) {
-    c.beginPath(); for (const l of L.tram) if (vis(l)) pathLine(c, l);
-    c.lineWidth = lw(.7, .3, .6, 1.8) * px; c.strokeStyle = 'rgba(190,120,255,0.42)'; c.stroke();
-  }
-
-  // roads: tertiary → secondary → primary → links → motorway
-  const R = L.roads;
-  if (z >= 12.4) {
-    c.beginPath(); for (const l of R.tr) if (vis(l)) pathLine(c, l);
-    c.lineWidth = lw(.7, .3, .6, 2) * px; c.strokeStyle = 'rgba(38,110,140,0.55)'; c.stroke();
-  }
-  if (z >= 11) {
-    c.beginPath(); for (const l of R.sc) if (vis(l)) pathLine(c, l);
-    c.lineWidth = lw(1, .4, .8, 2.8) * px; c.strokeStyle = 'rgba(30,150,185,0.75)'; c.stroke();
-  }
-  { c.beginPath(); for (const l of R.pr) if (vis(l)) pathLine(c, l);
-    const w = lw(1.4, .45, 1, 4);
-    if (z >= 11.5) { c.lineWidth = w * 3.2 * px; c.strokeStyle = 'rgba(51,230,255,0.14)'; c.stroke(); }
-    c.lineWidth = w * px; c.strokeStyle = z >= 11.5 ? 'rgba(51,230,255,0.9)' : 'rgba(51,230,255,0.7)'; c.stroke(); }
-  if (z >= 11.8) {
-    c.beginPath(); for (const l of R.lk) if (vis(l)) pathLine(c, l);
-    c.lineWidth = lw(.9, .3, .8, 2) * px; c.strokeStyle = 'rgba(255,166,43,0.55)'; c.stroke();
-  }
-  { c.beginPath(); for (const l of R.mw) if (vis(l)) pathLine(c, l);
-    const w = lw(2.2, .5, 1.6, 6);
-    c.lineWidth = w * 3.4 * px; c.strokeStyle = 'rgba(255,166,43,0.16)'; c.stroke();
-    c.lineWidth = w * px; c.strokeStyle = '#ffb347'; c.stroke();
-    c.lineWidth = w * .35 * px; c.strokeStyle = '#fff1d6'; c.globalAlpha = .55; c.stroke(); c.globalAlpha = 1; }
-
-  // subway
-  { c.beginPath(); for (const l of L.subway) if (vis(l)) pathLine(c, l);
-    const w = lw(2.4, .5, 2, 5.5);
-    c.lineWidth = w * 3.6 * px; c.strokeStyle = 'rgba(255,47,214,0.22)'; c.stroke();
-    c.lineWidth = w * px; c.strokeStyle = C.magenta; c.stroke();
-    c.lineWidth = w * .3 * px; c.strokeStyle = '#ffd8f6'; c.globalAlpha = .7; c.stroke(); c.globalAlpha = 1; }
-
-  // ---- screen space: labels, landmark, toilets ----
-  c.setTransform(dpr, 0, 0, dpr, 0, 0);
-  if (z >= 12.2) drawPlaceLabels(c, left, top, S);
-
-  // CN Tower beacon
-  { const [sx, sy] = toScreen(CN.x, CN.y);
-    if (sx > -40 && sx < W + 40 && sy > -40 && sy < H + 40) {
-      c.strokeStyle = C.cyan2; c.lineWidth = 1; c.beginPath(); c.moveTo(sx, sy - 14); c.lineTo(sx, sy + 4); c.stroke();
-      c.fillStyle = C.cyan2; c.beginPath(); c.arc(sx, sy - 14, 2, 0, TAU); c.fill();
-      if (z >= 12) { c.font = `9px ${FONT_MONO}`; c.fillStyle = 'rgba(169,244,255,0.75)'; c.textAlign = 'left'; c.fillText('CN TOWER', sx + 6, sy - 10); }
-    } }
-
-  // toilets
+  // units
   const r = lw(2.2, .55, 2.2, 6), glow = r * 2.6;
-  for (const t of L.toilets) {
+  const many = U.length > 4000;
+  for (const t of U) {
     const sx = (t.x - left) * S, sy = (t.y - top) * S;
     if (sx < -20 || sx > W + 20 || sy < -20 || sy > H + 20) continue;
-    const col = toiletColor(t), on = passesFilter(t);
-    c.globalAlpha = on ? .22 : .08; c.fillStyle = col; c.beginPath(); c.arc(sx, sy, glow, 0, TAU); c.fill();
-    c.globalAlpha = on ? 1 : .35; c.beginPath(); c.arc(sx, sy, r, 0, TAU); c.fill();
-    if (on && z >= 12) { c.globalAlpha = .9; c.fillStyle = '#fff'; c.beginPath(); c.arc(sx, sy, r * .35, 0, TAU); c.fill(); }
+    const col = unitColor(t), on = passesFilter(t);
+    if (!many) { c.globalAlpha = on ? .22 : .08; c.fillStyle = col; c.beginPath(); c.arc(sx, sy, glow, 0, TAU); c.fill(); }
+    c.globalAlpha = on ? 1 : .35; c.fillStyle = col; c.beginPath(); c.arc(sx, sy, r, 0, TAU); c.fill();
+    if (on && z >= 12 && !many) { c.globalAlpha = .9; c.fillStyle = '#fff'; c.beginPath(); c.arc(sx, sy, r * .35, 0, TAU); c.fill(); }
   }
   c.globalAlpha = 1;
 }
-function toiletColor(t) { return t.s === 0 ? C.red : t.a === 'public' ? C.mint : t.a === 'unverified' ? C.cyanDim : C.amber; }
-function drawPlaceLabels(c, left, top, S) {
-  const placed = [];
-  c.font = `10px ${FONT_MONO}`; c.textAlign = 'center'; c.textBaseline = 'middle';
-  if ('letterSpacing' in c) c.letterSpacing = '2px';
-  for (const p of L.places) {
-    const sx = (p.x - left) * S, sy = (p.y - top) * S;
-    if (sx < 0 || sx > W || sy < 0 || sy > H) continue;
-    const w = c.measureText(p.name).width + 8, h = 14;
-    const box = { x: sx - w / 2, y: sy - h / 2, w, h };
-    if (placed.some(b => box.x < b.x + b.w && box.x + box.w > b.x && box.y < b.y + b.h && box.y + box.h > b.y)) continue;
-    placed.push(box);
-    c.fillStyle = 'rgba(4,6,12,0.55)'; c.fillRect(box.x, box.y, w, h);
-    c.fillStyle = 'rgba(111,159,179,0.9)'; c.fillText(p.name, sx, sy + 1);
-  }
-  if ('letterSpacing' in c) c.letterSpacing = '0px';
-  c.textBaseline = 'alphabetic';
+function unitColor(t) {
+  if (t.s === 0) return C.red;
+  if (t.a === 'restricted') return C.amber;
+  if (t.s === 1 || t.a === 'public') return C.mint;
+  return (DS && (DS.fields.status || DS.fields.access)) ? C.cyanDim : C.mint;
 }
 
 /* ---------------- filters / ranking ---------------- */
 let openOnly = true, publicOnly = false;
-function passesFilter(t) { return (!openOnly || t.s === 1) && (!publicOnly || t.a === 'public' || t.a === 'unverified'); }
+function passesFilter(t) { return (!openOnly || t.s !== 0) && (!publicOnly || t.a !== 'restricted'); }
 let user = null;          // {lat, lon, acc, x, y, manual}
-let ranked = [];          // filtered toilets sorted by distance
+let ranked = [];          // filtered units sorted by distance
 let rankIdx = 0;
 let target = null;
 function computeRank() {
   if (!user) { ranked = []; return; }
-  for (const t of L.toilets) t.dist = hav(user.lat, user.lon, t.la, t.lo);
-  ranked = L.toilets.filter(passesFilter).sort((a, b) => a.dist - b.dist);
-  if (!ranked.length) ranked = L.toilets.slice().sort((a, b) => a.dist - b.dist);
+  for (const t of U) t.dist = hav(user.lat, user.lon, t.la, t.lo);
+  ranked = U.filter(passesFilter).sort((a, b) => a.dist - b.dist);
+  if (!ranked.length) ranked = U.slice().sort((a, b) => a.dist - b.dist);
 }
 
 /* ---------------- SFX (synthesised, off by default) ---------------- */
@@ -250,6 +197,7 @@ const SFX = {
   lock: () => { tone(660, 660, .1, 'square', .04); setTimeout(() => tone(990, 990, .16, 'square', .04), 110); },
   target: () => { tone(330, 880, .4, 'sawtooth', .04); setTimeout(() => tone(1320, 1320, .25, 'sine', .05), 200); },
   ui: () => tone(1200, 1200, .04, 'square', .025),
+  err: () => tone(300, 120, .25, 'sawtooth', .04),
 };
 
 /* ---------------- HUD text ---------------- */
@@ -277,7 +225,8 @@ function updateCoordsIdle() {
 }
 function fmtDist(m) { return m < 950 ? `${Math.round(m)} M` : `${(m / 1000).toFixed(m < 9500 ? 1 : 0)} KM`; }
 function fmtWalk(m) { const min = Math.round(m / 81); return min < 1 ? '< 1 MIN WALK' : min < 60 ? `~${min} MIN WALK` : `~${(min / 60).toFixed(1)} H WALK`; }
-setInterval(() => { const d = new Date(); $('clock').textContent = d.toLocaleTimeString('en-CA', { hour12: false, timeZone: 'America/Toronto' }); }, 1000);
+function gridStatus() { return DS ? `GRID ONLINE · ${U.length} UNITS${DS.fields.status ? ` · ${DS.nOpen} OPEN` : ''}` : 'NO DATA LOADED'; }
+setInterval(() => { const d = new Date(); $('clock').textContent = d.toLocaleTimeString([], { hour12: false }); }, 1000);
 
 /* ---------------- sequence state machine ---------------- */
 const seq = { phase: 'idle', t0: 0, fix: null, err: null, fly: null, flashT: -1e9, glitchT: -1e9, tick: -1, sweepR: 0, sweepDur: 0, sweepMax: 0, hits: 0, lastHit: 0, cands: [], satPts: [], fixScreen: null };
@@ -288,10 +237,11 @@ function flash(strength) { seq.flashT = now(); seq.flashStrength = strength || .
 
 function startFind() {
   if (busy()) return;
+  if (!U.length) { openPanel(); return; }
   hideCard();
   seq.fix = null; seq.err = null; seq.hits = 0; seq.cands = [];
-  for (const t of L.toilets) t.cross = 0;
-  document.getElementById('app').classList.add('busy');
+  for (const t of U) t.cross = 0;
+  $('app').classList.add('busy');
   stage.classList.remove('pin'); pinMode = false; $('chipPin').classList.remove('on');
   $('overlay').classList.add('show'); $('overlay').classList.remove('actions');
   $('ovTitle').textContent = 'ACQUIRING POSITION'; $('ovJp').textContent = '位置特定中'; $('ovSkip').hidden = false; $('ovSkip').textContent = 'TAP ANYWHERE TO ABORT';
@@ -319,10 +269,11 @@ function beginFly() {
   const dist = t ? t.dist : 500;
   seq.sweepMax = Math.max(dist * 1.18, 140);
   const availR = Math.max(60, Math.min(W, H - hudPad() - 120) / 2 - 24);
-  const zNeeded = Math.log2((availR * M_PER_UNIT / seq.sweepMax) / 256);
-  const z = clamp(zNeeded, 10.5, 15.6);
+  const zNeeded = Math.log2((availR * mpuAt(user.lat) / seq.sweepMax) / 256);
+  const z = clamp(zNeeded, 4, 15.6);
   const scy = (hudPad() + (H - 100)) / 2, S = scale(z);
   seq.fly = { from: { ...view }, to: { cx: user.x, cy: user.y - (scy - H / 2) / S, z }, dur: reduceMotion ? 500 : 1500 };
+  prefetchView(seq.fly.to);
   seq.tick = -1;
   $('overlay').classList.remove('actions'); $('ovSkip').hidden = false; $('ovSkip').textContent = 'TAP ANYWHERE TO SKIP';
   $('ovTitle').textContent = 'SIGNAL ACQUIRED'; $('ovJp').textContent = '信号取得';
@@ -341,12 +292,13 @@ function signalLost() {
 }
 function abort() {
   setPhase('idle'); $('overlay').classList.remove('show', 'actions'); $('app').classList.remove('busy');
-  setStatus(user ? 'GRID ONLINE · POSITION HELD' : `GRID ONLINE · ${L.toilets.length} UNITS · ${N_OPEN} OPEN`); updateCoordsIdle();
+  setStatus(user ? 'GRID ONLINE · POSITION HELD' : gridStatus()); updateCoordsIdle();
 }
 function finishNow() {
   // skip straight to the result
   if (!user) return abort();
   if (!target) { computeRank(); target = ranked[0]; }
+  if (!target) return abort();
   Object.assign(view, finalView()); dirty = true;
   setPhase('done'); $('overlay').classList.remove('show', 'actions'); $('app').classList.remove('busy');
   showCard(); SFX.target();
@@ -363,8 +315,9 @@ function retarget(idx, animate) {
   rankIdx = idx; target = ranked[rankIdx] || null;
   if (!target) return;
   if (animate && !reduceMotion) {
-    for (const t of L.toilets) t.cross = 0;
+    for (const t of U) t.cross = 0;
     seq.fly = { from: { ...view }, to: finalView(), dur: 700 };
+    prefetchView(seq.fly.to);
     setPhase('target'); seq.mini = true; SFX.target();
   } else { Object.assign(view, finalView()); dirty = true; }
   fillCard();
@@ -397,9 +350,9 @@ function updateSeq(t) {
     case 'sweep': {
       const p = clamp(el / seq.sweepDur, 0, 1); seq.sweepR = seq.sweepMax * easeOut(p);
       let n = 0;
-      for (const t2 of L.toilets) { if (t2.cross) { n++; continue; } if (t2.dist <= seq.sweepR) { t2.cross = t; n++; if (t - seq.lastHit > 70) { seq.lastHit = t; SFX.hit(); } } }
-      $('ovLines').textContent = `RADIUS   ${fmtDist(seq.sweepR)}\nCONTACTS ${String(n).padStart(3, '0')}\nFILTER   ${openOnly ? 'OPEN' : 'ALL'}${publicOnly ? ' · PUBLIC' : ''}`;
-      if (p >= 1) { seq.fly = { from: { ...view }, to: finalView(), dur: reduceMotion ? 300 : 950 }; seq.mini = false; setPhase('target'); SFX.target();
+      for (const t2 of U) { if (t2.cross) { n++; continue; } if (t2.dist <= seq.sweepR) { t2.cross = t; n++; if (t - seq.lastHit > 70) { seq.lastHit = t; SFX.hit(); } } }
+      $('ovLines').textContent = `RADIUS   ${fmtDist(seq.sweepR)}\nCONTACTS ${String(n).padStart(3, '0')}\nFILTER   ${openOnly && DS.fields.status ? 'OPEN' : 'ALL'}${publicOnly ? ' · PUBLIC' : ''}`;
+      if (p >= 1) { seq.fly = { from: { ...view }, to: finalView(), dur: reduceMotion ? 300 : 950 }; prefetchView(seq.fly.to); seq.mini = false; setPhase('target'); SFX.target();
         setStatus('TARGET ACQUIRED', 'lock'); $('ovTitle').textContent = 'TARGET ACQUIRED'; $('ovJp').textContent = '目標捕捉'; $('ovLines').textContent = target ? `UNIT     ${target.n.toUpperCase().slice(0, 28)}\nRANGE    ${fmtDist(target.dist)}\nETA      ${fmtWalk(target.dist)}` : ''; }
       break; }
     case 'target': {
@@ -412,8 +365,7 @@ function updateSeq(t) {
 function updateAcquireLines(el) {
   const p = Math.min(1, el / 1900);
   const bar = k => { const n = Math.round(clamp((p - k) / .35, 0, 1) * 8); return '▮'.repeat(n) + '░'.repeat(8 - n); };
-  const rnd = n => String(Math.floor(Math.random() * Math.pow(10, n))).padStart(n, '0');
-  const c = seq.fix ? `${seq.fix.lat.toFixed(4)}° N · ${Math.abs(seq.fix.lon).toFixed(4)}° W` : `43.${rnd(4)}° N · 79.${rnd(4)}° W`;
+  const c = seq.fix ? fmtCoord(seq.fix.lat, seq.fix.lon) : fmtCoord(center.lat + (Math.random() - .5) * .2, center.lon + (Math.random() - .5) * .2);
   $('ovLines').textContent = `UPLINK 01  ${bar(0)}\nUPLINK 02  ${bar(.18)}\nUPLINK 03  ${bar(.36)}\nTRIANG.    ${c}`;
 }
 
@@ -450,21 +402,17 @@ function drawFX(t, dt) {
   if (ph === 'acquire' || ph === 'lost') {
     c.fillStyle = 'rgba(4,6,12,0.5)'; c.fillRect(0, 0, W, H);
     const cx = W / 2, cy = H * .46, R = Math.hypot(W, H) * .55;
-    // rings
     for (let i = 0; i < 4; i++) { const p = ((t / 1600) + i / 4) % 1; c.strokeStyle = `rgba(51,230,255,${(1 - p) * .35})`; c.lineWidth = 1; c.beginPath(); c.arc(cx, cy, p * R, 0, TAU); c.stroke(); }
-    // sweep wedge
     const ang = (t / 1400) * TAU;
     let grad = null; try { grad = c.createConicGradient(ang - TAU * .28, cx, cy); } catch (e) { grad = null; }
     if (grad) { grad.addColorStop(0, 'rgba(51,230,255,0)'); grad.addColorStop(.28, 'rgba(51,230,255,0.28)'); grad.addColorStop(.281, 'rgba(51,230,255,0)'); grad.addColorStop(1, 'rgba(51,230,255,0)'); c.fillStyle = grad; c.beginPath(); c.arc(cx, cy, R, 0, TAU); c.fill(); }
     c.strokeStyle = 'rgba(169,244,255,0.9)'; c.lineWidth = 1.5; c.beginPath(); c.moveTo(cx, cy); c.lineTo(cx + Math.cos(ang) * R, cy + Math.sin(ang) * R); c.stroke();
-    // crosshair
     c.strokeStyle = 'rgba(51,230,255,0.35)'; c.lineWidth = 1; c.beginPath(); c.moveTo(cx - 24, cy); c.lineTo(cx + 24, cy); c.moveTo(cx, cy - 24); c.lineTo(cx, cy + 24); c.stroke();
-    // contacts: toilets the sweep passes over blink
-    const S = scale(view.z);
-    for (let i = 0; i < L.toilets.length; i += 2) { const tt = L.toilets[i]; const sx = (tt.x - view.cx) * S + W / 2, sy = (tt.y - view.cy) * S + H / 2; if (sx < 0 || sx > W || sy < 0 || sy > H) continue; const a = Math.atan2(sy - cy, sx - cx); let d = (ang - a) % TAU; if (d < 0) d += TAU; if (d < 1.2) { c.fillStyle = `rgba(93,255,192,${(1 - d / 1.2) * .9})`; c.fillRect(sx - 1.5, sy - 1.5, 3, 3); } }
-    // uplink nodes
+    // contacts: units the sweep passes over blink
+    const S = scale(view.z), step = U.length > 4000 ? Math.ceil(U.length / 2000) : 2;
+    for (let i = 0; i < U.length; i += step) { const tt = U[i]; const sx = (tt.x - view.cx) * S + W / 2, sy = (tt.y - view.cy) * S + H / 2; if (sx < 0 || sx > W || sy < 0 || sy > H) continue; const a = Math.atan2(sy - cy, sx - cx); let d = (ang - a) % TAU; if (d < 0) d += TAU; if (d < 1.2) { c.fillStyle = `rgba(93,255,192,${(1 - d / 1.2) * .9})`; c.fillRect(sx - 1.5, sy - 1.5, 3, 3); } }
     seq.satPts.forEach((p, i) => { const pp = ((t / 1300) + i / 3) % 1; c.strokeStyle = `rgba(255,47,214,${(1 - pp) * .6})`; c.lineWidth = 1; c.beginPath(); c.arc(p[0], p[1], 6 + pp * 60, 0, TAU); c.stroke(); c.fillStyle = C.magenta; c.beginPath(); c.moveTo(p[0], p[1] - 6); c.lineTo(p[0] + 5, p[1] + 4); c.lineTo(p[0] - 5, p[1] + 4); c.closePath(); c.fill(); c.font = `9px ${FONT_MONO}`; c.fillStyle = 'rgba(255,208,245,0.8)'; c.textAlign = 'left'; c.fillText(`SAT-0${i + 1}`, p[0] + 10, p[1] + 3); });
-    if (seq.fix) { // triangulation lines converge on the fix
+    if (seq.fix) {
       const q = proj(seq.fix.lon, seq.fix.lat), [ux, uy] = toScreen(q[0], q[1]);
       c.strokeStyle = 'rgba(255,47,214,0.7)'; c.setLineDash([4, 4]); c.lineDashOffset = -t / 20; c.lineWidth = 1; c.beginPath(); for (const p of seq.satPts) { c.moveTo(p[0], p[1]); c.lineTo(clamp(ux, -50, W + 50), clamp(uy, -50, H + 50)); } c.stroke(); c.setLineDash([]);
     }
@@ -482,7 +430,7 @@ function drawFX(t, dt) {
     c.strokeStyle = C.cyan; c.lineWidth = 1; c.beginPath(); c.moveTo(ux - 18, uy); c.lineTo(ux - 8, uy); c.moveTo(ux + 8, uy); c.lineTo(ux + 18, uy); c.moveTo(ux, uy - 18); c.lineTo(ux, uy - 8); c.moveTo(ux, uy + 8); c.lineTo(ux, uy + 18); c.stroke();
     c.font = `9px ${FONT_MONO}`; c.fillStyle = 'rgba(169,244,255,0.85)'; c.textAlign = 'left'; c.fillText(user.manual ? 'PIN' : 'YOU', ux + 14, uy - 12);
 
-    if (ph === 'fly') { // enhance brackets converge on the user
+    if (ph === 'fly') {
       const p = clamp(el / seq.fly.dur, 0, 1), half = lerp(Math.min(W, H) * .48, 26, easeInOut(p));
       bracket(c, ux, uy, half, Math.max(8, half * .22), 'rgba(169,244,255,0.9)', 1.5);
       c.font = `10px ${FONT_MONO}`; c.fillStyle = C.cyan2; c.textAlign = 'left'; c.fillText(`ENHANCE ×${Math.pow(2, Math.max(0, seq.tick) + 1)}`, ux + half + 6, uy - half + 10);
@@ -502,14 +450,12 @@ function drawFX(t, dt) {
         c.strokeStyle = 'rgba(169,244,255,0.9)'; c.lineWidth = 2; c.beginPath(); c.arc(ux, uy, r, 0, TAU); c.stroke();
         c.strokeStyle = 'rgba(51,230,255,0.25)'; c.lineWidth = 12; c.stroke();
       }
-      // blips on crossed units
-      for (const tt of L.toilets) {
+      for (const tt of U) {
         if (!tt.cross) continue; const age = (t - tt.cross) / 900; if (age > 1 && !seq.cands.includes(tt)) continue;
         const [sx, sy] = toScreen(tt.x, tt.y); if (sx < -30 || sx > W + 30 || sy < -30 || sy > H + 30) continue;
         const a = Math.max(0, 1 - age);
         c.strokeStyle = `rgba(93,255,192,${a})`; c.lineWidth = 1.5; c.beginPath(); c.arc(sx, sy, 4 + age * 22, 0, TAU); c.stroke();
       }
-      // candidate tracers + labels
       seq.cands.forEach((tt, i) => {
         if (!tt.cross) return; const [sx, sy] = toScreen(tt.x, tt.y), age = clamp((t - tt.cross) / 500, 0, 1);
         const col = i === 0 ? C.magenta : 'rgba(93,255,192,0.8)';
@@ -534,7 +480,6 @@ function drawFX(t, dt) {
     }
   }
 
-  // full-screen flash
   const fa = 1 - (t - seq.flashT) / 200;
   if (fa > 0) { $('flash').style.opacity = (fa * (seq.flashStrength || .35)).toFixed(3); } else if ($('flash').style.opacity !== '0') $('flash').style.opacity = '0';
 }
@@ -547,8 +492,12 @@ function fillCard(quiet) {
   const t = target, has = user && !isNaN(t.dist);
   const far = has && t.dist > 25000;
   $('eyebrow').textContent = far ? 'OUTSIDE THE GRID · NEAREST INDEXED UNIT' : user ? `${t === ranked[rankIdx] ? 'NEAREST UNIT' : 'SELECTED UNIT'} · ${String(rankIdx + 1).padStart(2, '0')} / ${ranked.length}` : 'SELECTED UNIT';
-  const pill = $('pill'), st = t.s === 0 ? 'closed' : t.a === 'public' ? 'open' : t.a === 'unverified' ? 'unverified' : 'restricted';
-  pill.className = 'pill ' + st; pill.textContent = st === 'restricted' ? (t.a === 'customers' ? 'CUSTOMERS ONLY' : 'PERMISSIVE') : st === 'unverified' ? 'OPEN · UNVERIFIED' : st;
+  const pill = $('pill');
+  const st = t.s === 0 ? 'closed' : t.a === 'restricted' ? 'restricted' : (t.s === 1 || t.a === 'public') ? 'open' : 'unverified';
+  const typed = DS.fields.status || DS.fields.access;
+  pill.className = 'pill ' + st;
+  pill.textContent = st === 'closed' ? 'CLOSED' : st === 'restricted' ? (t.ar || 'RESTRICTED').toUpperCase().slice(0, 18)
+    : st === 'open' ? (t.s === 1 ? (t.a === 'public' ? 'OPEN · PUBLIC' : 'OPEN') : 'PUBLIC') : typed ? 'UNVERIFIED' : 'UNIT';
   $('cName').textContent = t.n.replace(/ \((customers only|permissive access)\)$/i, '');
   $('cDist').textContent = has ? fmtDist(t.dist) : '— M';
   $('cWalk').textContent = has ? fmtWalk(t.dist) : 'SET A POSITION FOR RANGE';
@@ -556,14 +505,16 @@ function fillCard(quiet) {
   if (t.s === 0) rows.push(['STATUS', `<span class="warn">CLOSED${t.r ? ' · ' + esc(t.r) : ''}</span>`]);
   else if (t.r) rows.push(['STATUS', `<span class="warn">${esc(t.r)}</span>`]);
   if (t.h) rows.push(['HOURS', esc(t.h)]);
-  rows.push(['ACCESS', esc({ public: 'Public', customers: 'Customers only', permissive: 'Permissive', unverified: 'Unverified (OSM)' }[t.a] || t.a) + (t.f === 'yes' ? ' · fee' : t.f === 'no' ? ' · free' : '')]);
+  const access = (t.ar || (t.a === 'public' ? 'Public' : '')) + (t.f === 'yes' ? (t.ar || t.a ? ' · fee' : 'Fee') : t.f === 'no' ? (t.ar || t.a ? ' · free' : 'Free') : '');
+  if (access) rows.push(['ACCESS', esc(access)]);
   if (t.ad) rows.push(['ADDRESS', esc(t.ad)]);
   if (t.d) rows.push(['WHERE', esc(t.d)]);
   if (t.w && t.w !== 'None') rows.push(['ACCESSIBLE', esc(t.w)]);
   if (t.t) rows.push(['TYPE', esc(t.t)]);
-  $('cRows').innerHTML = rows.map(([k, v]) => `<b>${k}</b><span>${v}</span>`).join('');
+  if (t.ex) for (const [k, v] of t.ex) rows.push([esc(k), esc(v)]);
+  $('cRows').innerHTML = rows.slice(0, 9).map(([k, v]) => `<b>${k}</b><span>${v}</span>`).join('');
   $('btnNav').href = `https://www.google.com/maps/dir/?api=1&destination=${t.la},${t.lo}&travelmode=walking`;
-  $('cSrc').textContent = (t.src === 'city' ? 'CITY OF TORONTO PARKS & REC' : 'OPENSTREETMAP') + ` · ${t.la.toFixed(5)}, ${t.lo.toFixed(5)}`;
+  $('cSrc').textContent = `${(t.src || DS.name).toUpperCase().slice(0, 44)} · ${t.la.toFixed(5)}, ${t.lo.toFixed(5)}`;
   const link = $('cLink'); if (t.u) { link.href = t.u; link.hidden = false; } else link.hidden = true;
   $('btnNext').hidden = !(user && ranked.length > 1);
   if (user && has && !quiet) setStatus(far ? `OUTSIDE THE GRID · NEAREST ${fmtDist(t.dist)}` : `ROUTE READY · ${fmtDist(t.dist)} · ${fmtWalk(t.dist)}`, 'lock');
@@ -606,24 +557,176 @@ function endPointer(e) {
 }
 stage.addEventListener('pointerup', endPointer); stage.addEventListener('pointercancel', endPointer);
 stage.addEventListener('wheel', e => { e.preventDefault(); const r = stage.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top; const w = toWorld(mx, my); view.z = clamp(view.z - e.deltaY * 0.0022, ZMIN, ZMAX); const S = scale(view.z); view.cx = w[0] - (mx - W / 2) / S; view.cy = w[1] - (my - H / 2) / S; dirty = true; onViewChange(); }, { passive: false });
-function onViewChange() { if (!busy()) updateCoordsIdle(); }
+function onViewChange() { view.cy = clamp(view.cy, 0, 1); if (!busy()) updateCoordsIdle(); }
 function onTap(sx, sy, dbl) {
   if (busy()) { if (seq.phase === 'lost') return; if (seq.phase === 'acquire' && !seq.fix) { abort(); return; } finishNow(); return; }
   if (pinMode) { const [lon, lat] = unproj(...toWorld(sx, sy)); pinMode = false; stage.classList.remove('pin'); $('chipPin').classList.remove('on'); $('chipPin').setAttribute('aria-pressed', 'false'); runWithPosition(lat, lon, 0, true); return; }
   if (dbl) { const w = toWorld(sx, sy); view.z = clamp(view.z + 1, ZMIN, ZMAX); const S = scale(view.z); view.cx = w[0] - (sx - W / 2) / S; view.cy = w[1] - (sy - H / 2) / S; dirty = true; onViewChange(); return; }
-  // hit test toilets
   let best = null, bd = 22;
-  for (const t of L.toilets) { const [x, y] = toScreen(t.x, t.y); const d = Math.hypot(x - sx, y - sy); if (d < bd) { bd = d; best = t; } }
+  for (const t of U) { const [x, y] = toScreen(t.x, t.y); const d = Math.hypot(x - sx, y - sy); if (d < bd) { bd = d; best = t; } }
   if (best) { target = best; if (user) { const i = ranked.indexOf(best); rankIdx = i >= 0 ? i : rankIdx; } showCard(); SFX.ui(); }
   else if ($('card').classList.contains('show')) hideCard();
 }
 function runWithPosition(lat, lon, acc, manual) {
-  hideCard(); for (const t of L.toilets) t.cross = 0;
+  if (!U.length) { openPanel(); return; }
+  hideCard(); for (const t of U) t.cross = 0;
   setUser(lat, lon, acc, manual);
   $('app').classList.add('busy'); $('overlay').classList.add('show'); $('overlay').classList.remove('actions');
   seq.satPts = [[W * .12, H * .2], [W * .9, H * .28], [W * .5, H * .78]];
   beginFly();
 }
+
+/* ---------------- local storage (IndexedDB, localStorage fallback) ---------------- */
+const store = (() => {
+  const DBN = 'loo-runner', ST = 'kv';
+  let dbp = null;
+  function open() {
+    if (dbp) return dbp;
+    dbp = new Promise((res, rej) => {
+      try { const r = indexedDB.open(DBN, 1); r.onupgradeneeded = () => r.result.createObjectStore(ST); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); r.onblocked = () => rej(new Error('blocked')); }
+      catch (e) { rej(e); }
+    });
+    return dbp;
+  }
+  const tx = (mode, fn) => open().then(db => new Promise((res, rej) => {
+    const t = db.transaction(ST, mode), q = fn(t.objectStore(ST));
+    t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error || new Error('aborted'));
+  }));
+  const LS = 'loo:';
+  const ls = {
+    get: k => { try { const v = localStorage.getItem(LS + k); return Promise.resolve(v ? JSON.parse(v) : undefined); } catch (e) { return Promise.resolve(undefined); } },
+    set: (k, v) => { try { localStorage.setItem(LS + k, JSON.stringify(v)); return Promise.resolve(); } catch (e) { return Promise.reject(e); } },
+    del: k => { try { localStorage.removeItem(LS + k); } catch (e) { /* ignore */ } return Promise.resolve(); },
+  };
+  return {
+    get: k => tx('readonly', s => s.get(k)).catch(() => ls.get(k)),
+    set: (k, v) => tx('readwrite', s => s.put(v, k)).catch(() => ls.set(k, v)),
+    del: k => tx('readwrite', s => s.delete(k)).catch(() => ls.del(k)).then(() => ls.del(k)),
+  };
+})();
+
+/* ---------------- dataset loading ---------------- */
+function applyDataset(ds, fit) {
+  if (busy()) abort();
+  DS = ds;
+  U = ds.points.map((p, i) => { const q = proj(p.lo, p.la); return Object.assign({ i, x: q[0], y: q[1], dist: NaN, cross: 0 }, p); });
+  const [minLo, minLa, maxLo, maxLa] = ds.bbox;
+  center = { lat: (minLa + maxLa) / 2, lon: (minLo + maxLo) / 2 };
+  user = null; ranked = []; target = null; rankIdx = 0; hideCard();
+  // chips only for fields the data actually has
+  openOnly = !!ds.fields.status; publicOnly = false;
+  $('chipOpen').hidden = !ds.fields.status; $('chipOpen').classList.toggle('on', openOnly); $('chipOpen').setAttribute('aria-pressed', String(openOnly));
+  $('chipPublic').hidden = !ds.fields.access; $('chipPublic').classList.remove('on'); $('chipPublic').setAttribute('aria-pressed', 'false');
+  buildLegend(ds.fields);
+  $('subName').textContent = `${ds.name.toUpperCase().slice(0, 26)} · ${U.length} UNITS`;
+  document.title = ds.sample ? 'Loo Runner' : `Loo Runner · ${ds.name}`;
+  layoutChrome();
+  if (fit) {
+    const a = proj(minLo, maxLa), b = proj(maxLo, minLa);
+    Object.assign(view, fitBounds(a[0], a[1], b[0], b[1], { l: 24, r: 24, t: hudPad() + 30, b: 120 }));
+    if (U.length === 1) view.z = Math.min(view.z, 14);
+  }
+  dirty = true;
+  scramble($('status'), gridStatus(), 900); $('led').className = 'led';
+  updateCoordsIdle();
+  renderPanel();
+}
+function buildLegend(f) {
+  const items = [];
+  if (f.status || f.access) {
+    items.push([C.mint, f.status && f.access ? 'OPEN · PUBLIC' : f.status ? 'OPEN' : 'PUBLIC']);
+    if (f.access) items.push([C.amber, 'RESTRICTED']);
+    if (f.status) items.push([C.red, 'CLOSED']);
+    items.push([C.cyanDim, 'UNVERIFIED']);
+  } else items.push([C.mint, 'UNIT']);
+  $('legend').innerHTML = items.map(([col, lab]) => `<span><i style="background:${col}"></i>${lab}</span>`).join('');
+}
+function loadParsed(ds, opts) {
+  ds.sample = !!opts.sample; ds.saved = false;
+  applyDataset(ds, true);
+  const notes = ds.notes.length ? '\n' + ds.notes.join('\n') : '';
+  if (opts.persist) {
+    store.set('dataset', ds).then(() => { ds.saved = true; renderPanel(); })
+      .catch(() => panelStatus(`Loaded ${U.length} units, but this browser refused to save them (storage full or blocked). They will be gone on reload.`, true));
+  }
+  panelStatus(`Loaded ${U.length} unit${U.length === 1 ? '' : 's'} from ${ds.format}${opts.sample ? ' (sample)' : ''}.${notes}`);
+  SFX.lock();
+}
+function loadText(text, name, opts) {
+  let ds;
+  try { ds = Parse.parseText(text, name); }
+  catch (e) { panelStatus(e.message || String(e), true); SFX.err(); return false; }
+  loadParsed(ds, opts);
+  return true;
+}
+function loadFile(file) {
+  if (!file) return;
+  if (file.size > 60 * 1024 * 1024) { panelStatus('That file is over 60 MB. Trim it down first.', true); return; }
+  panelStatus(`Reading ${file.name}…`);
+  file.text().then(text => { if (loadText(text, file.name, { persist: true })) closePanelSoon(); })
+    .catch(e => panelStatus('Could not read the file: ' + (e.message || e), true));
+}
+function loadSample() {
+  const raw = window.SAMPLE_DATA;
+  if (!raw) { panelStatus('No sample bundled in this build.', true); return; }
+  const ds = Parse.parseText(raw, 'Toronto public toilets');
+  ds.name = 'Toronto public toilets';
+  loadParsed(ds, { sample: true, persist: false });
+}
+function forgetData() {
+  store.del('dataset').finally(() => { loadSample(); panelStatus('Your dataset was removed from this browser. Back on the Toronto sample.'); });
+}
+function loadFromURL(url) {
+  panelStatus(`Fetching ${url.slice(0, 80)}…`);
+  fetch(url, { mode: 'cors' }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text(); })
+    .then(text => { if (loadText(text, url.split('?')[0], { persist: true })) closePanelSoon(); else openPanel(); })
+    .catch(e => { openPanel(); panelStatus(`Could not fetch that URL (${e.message || e}). The host has to allow cross-origin requests; GitHub raw links and most open-data portals do.`, true); });
+}
+
+/* ---------------- data panel ---------------- */
+let panelTimer = 0;
+function openPanel() { $('panel').hidden = false; $('chipData').classList.add('on'); $('chipData').setAttribute('aria-pressed', 'true'); renderPanel(); clearTimeout(panelTimer); }
+function closePanel() { $('panel').hidden = true; $('chipData').classList.remove('on'); $('chipData').setAttribute('aria-pressed', 'false'); clearTimeout(panelTimer); }
+function closePanelSoon() { clearTimeout(panelTimer); panelTimer = setTimeout(closePanel, 1600); }
+function panelStatus(msg, isErr) { const el = $('pnStatus'); el.hidden = false; el.textContent = msg; el.classList.toggle('err', !!isErr); if (isErr) openPanel(); }
+function renderPanel() {
+  if (!DS) { $('pnRows').innerHTML = ''; return; }
+  const [minLo, minLa, maxLo, maxLa] = DS.bbox;
+  const span = hav(minLa, minLo, maxLa, maxLo);
+  const fields = ['status', 'access', 'hours', 'address', 'url'].filter(k => DS.fields[k]).map(k => k.toUpperCase()).join(' · ') || 'NAME + POSITION ONLY';
+  const rows = [
+    ['DATASET', esc(DS.name)],
+    ['UNITS', `${U.length}${DS.fields.status ? ` · ${DS.nOpen} open` : ''}`],
+    ['FORMAT', esc(DS.format)],
+    ['FIELDS', esc(fields)],
+    ['SPAN', span < 1 ? 'single point' : `${fmtDist(span).toLowerCase()} across · centre ${fmtCoord(center.lat, center.lon)}`],
+    ['STORAGE', DS.sample ? 'Bundled sample, not saved' : DS.saved ? 'Saved in this browser' : 'Not saved yet'],
+  ];
+  $('pnRows').innerHTML = rows.map(([k, v]) => `<b>${k}</b><span>${v}</span>`).join('');
+  $('btnSample').disabled = !!DS.sample;
+  $('btnForget').disabled = !!DS.sample;
+}
+$('chipData').addEventListener('click', () => { SFX.ui(); if ($('panel').hidden) openPanel(); else closePanel(); });
+$('pnClose').addEventListener('click', () => { SFX.ui(); closePanel(); });
+$('panel').addEventListener('click', e => { if (e.target === $('panel')) closePanel(); });
+$('file').addEventListener('change', e => { loadFile(e.target.files && e.target.files[0]); e.target.value = ''; });
+$('drop').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('file').click(); } });
+$('btnSample').addEventListener('click', () => { SFX.ui(); loadSample(); closePanelSoon(); });
+$('btnForget').addEventListener('click', () => { SFX.ui(); forgetData(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('panel').hidden) closePanel(); });
+let dragDepth = 0;
+window.addEventListener('dragenter', e => { if (!e.dataTransfer || ![...e.dataTransfer.types].includes('Files')) return; e.preventDefault(); dragDepth++; $('app').classList.add('dragging'); });
+window.addEventListener('dragover', e => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
+window.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; $('app').classList.remove('dragging'); } });
+window.addEventListener('drop', e => { e.preventDefault(); dragDepth = 0; $('app').classList.remove('dragging'); const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if (f) { openPanel(); loadFile(f); } });
+window.addEventListener('paste', e => { // pasted GeoJSON / CSV text
+  const text = e.clipboardData && e.clipboardData.getData('text');
+  if (!text || text.length < 20) return;
+  const head = text.slice(0, 2000), looksCsv = head.split('\n').length >= 3 && /^[^\n]*[,;\t][^\n]*\n/.test(head);
+  if (!/^[\s\uFEFF]*[\[{<]/.test(head) && !looksCsv) return;
+  const active = document.activeElement; if (active && /^(input|textarea)$/i.test(active.tagName)) return;
+  openPanel(); if (loadText(text, 'Pasted data', { persist: true })) closePanelSoon();
+});
 
 /* ---------------- controls ---------------- */
 $('fab').addEventListener('click', () => { SFX.ui(); startFind(); });
@@ -631,11 +734,16 @@ $('btnClose').addEventListener('click', () => { hideCard(); SFX.ui(); });
 $('btnNext').addEventListener('click', () => { if (!ranked.length) return; retarget((rankIdx + 1) % Math.min(ranked.length, 12), true); });
 $('btnAbort').addEventListener('click', abort);
 $('btnPinMode').addEventListener('click', () => { abort(); pinMode = true; stage.classList.add('pin'); $('chipPin').classList.add('on'); $('chipPin').setAttribute('aria-pressed', 'true'); setStatus('TAP THE MAP TO SET POSITION', 'busy'); });
-$('btnSim').addEventListener('click', () => { abort(); const lat = 43.628 + Math.random() * .1, lon = -79.50 + Math.random() * .2; runWithPosition(lat, lon, 25 + Math.random() * 40, true); });
+$('btnSim').addEventListener('click', () => {
+  abort();
+  const [minLo, minLa, maxLo, maxLa] = DS.bbox, padLa = Math.max(.01, (maxLa - minLa) * .1), padLo = Math.max(.01, (maxLo - minLo) * .1);
+  const lat = minLa - padLa + Math.random() * (maxLa - minLa + 2 * padLa), lon = minLo - padLo + Math.random() * (maxLo - minLo + 2 * padLo);
+  runWithPosition(lat, lon, 25 + Math.random() * 40, true);
+});
 function toggleChip(id, fn) { $(id).addEventListener('click', () => { if (busy() && seq.phase !== 'lost') return; const on = !$(id).classList.contains('on'); $(id).classList.toggle('on', on); $(id).setAttribute('aria-pressed', String(on)); fn(on); SFX.ui(); }); }
 toggleChip('chipOpen', on => { openOnly = on; refilter(); });
 toggleChip('chipPublic', on => { publicOnly = on; refilter(); });
-toggleChip('chipPin', on => { pinMode = on; stage.classList.toggle('pin', on); if (on) { hideCard(); setStatus('TAP THE MAP TO SET POSITION', 'busy'); } else abort(); });
+toggleChip('chipPin', on => { pinMode = on; stage.classList.toggle('pin', on); if (on) { hideCard(); closePanel(); setStatus('TAP THE MAP TO SET POSITION', 'busy'); } else abort(); });
 toggleChip('chipSfx', on => { sfxOn = on; if (on) { ac(); SFX.lock(); } });
 function refilter() { dirty = true; if (user && !busy()) { computeRank(); retarget(0, $('card').classList.contains('show')); } }
 $('overlay').addEventListener('click', e => { if (e.target === $('overlay') && busy() && seq.phase !== 'lost') finishNow(); });
@@ -644,12 +752,19 @@ if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { di
 
 /* ---------------- boot ---------------- */
 resize(); seedRain();
-{ // fit the whole city, leaving room for the HUD and the button
-  const b = L.boundary, pad = { l: 10, r: 10, t: hudPad() + 30, b: 120 };
-  Object.assign(view, fitBounds(b.minx, b.miny, b.maxx, b.maxy, pad));
-}
-scramble($('status'), `GRID ONLINE · ${L.toilets.length} UNITS · ${N_OPEN} OPEN`, 900);
-updateCoordsIdle();
+buildLegend({});
+scramble($('status'), 'LOADING GRID', 600);
+const srcParam = new URLSearchParams(location.search).get('src');
+store.get('dataset').then(saved => {
+  if (saved && Array.isArray(saved.points) && saved.points.length) { saved.saved = true; saved.sample = false; saved.notes = saved.notes || []; applyDataset(saved, true); }
+  else loadSample();
+}).catch(() => loadSample()).then(() => {
+  if (srcParam && /^https?:\/\//i.test(srcParam)) loadFromURL(srcParam);
+  else if (!srcParam && DS && DS.sample && !sessionStorage.getItem('loo:hinted')) {
+    try { sessionStorage.setItem('loo:hinted', '1'); } catch (e) { /* ignore */ }
+    setTimeout(() => { if (!busy()) setStatus('SAMPLE GRID · TAP DATA FOR YOUR CITY'); }, 2600);
+  }
+});
 let last = now();
 function frame(t) {
   requestAnimationFrame(frame);

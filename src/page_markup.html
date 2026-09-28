@@ -11,9 +11,9 @@
     <div class="hud-row">
       <div class="brand">
         <div class="title" id="title">LOO <b>RUNNER</b></div>
-        <div class="sub"><span>TORONTO SANITATION GRID</span><span class="jp">トイレ検索</span></div>
+        <div class="sub"><span id="subName">SANITATION GRID</span><span class="jp">トイレ検索</span></div>
       </div>
-      <div class="clock"><span id="clock">--:--:--</span><small>TORONTO · LOCAL</small></div>
+      <div class="clock"><span id="clock">--:--:--</span><small>LOCAL</small></div>
     </div>
     <div class="readout"><span class="led" id="led"></span><span id="status">GRID ONLINE</span></div>
     <div class="coords" id="coords">—</div>
@@ -24,18 +24,15 @@
     <button class="chip" id="chipPublic" aria-pressed="false">PUBLIC ONLY</button>
     <button class="chip mag" id="chipPin" aria-pressed="false">SET PIN</button>
     <button class="chip" id="chipSfx" aria-pressed="false">SFX</button>
+    <button class="chip data" id="chipData" aria-pressed="false">DATA ▸</button>
   </div>
-  <div class="legend" id="legend">
-    <span><i style="background:#5dffc0"></i>OPEN</span>
-    <span><i style="background:#ffa62b"></i>RESTRICTED</span>
-    <span><i style="background:#ff3b5c"></i>CLOSED</span>
-    <span><i style="background:#1a7f95"></i>UNVERIFIED</span>
-  </div>
+  <div class="legend" id="legend"></div>
 
   <div class="sign" aria-hidden="true">公衆<span>便所</span></div>
+  <div class="attrib">Basemap <a href="https://www.esri.com/" target="_blank" rel="noopener">© Esri</a> · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a></div>
 
   <div class="fab-halo" aria-hidden="true"></div>
-  <button class="fab" id="fab" aria-label="Find the closest public toilet">
+  <button class="fab" id="fab" aria-label="Find the closest unit">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
     <span>FIND CLOSEST</span>
   </button>
@@ -73,4 +70,26 @@
       <div class="ov-skip" id="ovSkip">TAP ANYWHERE TO SKIP</div>
     </div>
   </div>
+
+  <section class="panel" id="panel" hidden aria-label="Load your own data">
+    <div class="pn-box">
+      <button class="close pn-close" id="pnClose" aria-label="Close">✕</button>
+      <div class="ov-title">DATA UPLINK</div>
+      <div class="ov-jp">データ取込</div>
+      <label class="drop" id="drop" tabindex="0">
+        <input type="file" id="file" accept=".geojson,.json,.csv,.tsv,.txt,.gpx,.kml,application/geo+json,application/json,text/csv,application/gpx+xml,application/vnd.google-earth.kml+xml" hidden>
+        <div class="drop-title">DROP A FILE · OR TAP TO BROWSE</div>
+        <div class="drop-sub">GeoJSON, JSON, CSV, GPX or KML for any city. Points are pulled out of whatever geometry is inside, and names, hours, status and access are detected from the properties.</div>
+        <div class="drop-sub dim">Stays in this browser. Nothing is uploaded to a server.</div>
+      </label>
+      <div class="pn-status" id="pnStatus" hidden></div>
+      <div class="rows pn-rows" id="pnRows"></div>
+      <div class="pn-actions">
+        <button id="btnSample">LOAD TORONTO SAMPLE</button>
+        <button id="btnForget">FORGET MY DATA</button>
+      </div>
+      <div class="pn-foot">Basemap: Esri World Dark Gray Canvas (Esri, HERE, Garmin, © OpenStreetMap contributors). Tip: a link like <code>?src=https://…/points.geojson</code> loads a file from the web and keeps it here.</div>
+    </div>
+  </section>
+  <div class="dropveil" id="dropveil" aria-hidden="true"><div>DROP TO LOAD</div></div>
 </div>
