@@ -4,7 +4,7 @@
 (function (root) {
 'use strict';
 
-const MAX_POINTS = 25000;
+const MAX_POINTS = 100000;
 const R_EARTH = 6378137;
 
 /* ---------------- key matching ---------------- */
@@ -109,6 +109,7 @@ function normaliseProps(rawProps, idx) {
   const ad = take('address'); if (ad) p.ad = String(clean(ad.v));
   const d = take('description'); if (d) p.d = String(clean(d.v));
   const u = take('url'); if (u) { const v = String(clean(u.v)); if (/^https?:\/\//i.test(v)) p.u = v; else if (/^www\./i.test(v)) p.u = 'https://' + v; else used.delete(u.k); }
+  const osm = entries.find(e => e.nk === 'osm' && /^(node|way|relation)\/\d+$/.test(String(e.v))); if (osm) { used.add(osm.k); if (!p.u) p.u = 'https://www.openstreetmap.org/' + osm.v; }
   const f = take('fee'); if (f) { p.f = feeValue(f.v); if (p.f === undefined) used.delete(f.k); }
   const w = take('wheelchair'); if (w) { const v = clean(w.v); p.w = v === true ? 'Yes' : v === false ? 'No' : String(v); }
   const t = take('type'); if (t) { const v = String(clean(t.v)); if (/^(node|way|relation|feature|point)$/i.test(v)) used.delete(t.k); else p.t = v; }
