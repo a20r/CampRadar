@@ -152,7 +152,9 @@ function drawBase() {
     if (sx < -20 || sx > W + 20 || sy < -20 || sy > H + 20) continue;
     const col = unitColor(t), on = passesFilter(t);
     if (!many) { c.globalAlpha = on ? .22 : .08; c.fillStyle = col; c.beginPath(); c.arc(sx, sy, glow, 0, TAU); c.fill(); }
-    c.globalAlpha = on ? 1 : .35; c.fillStyle = col; c.beginPath(); c.arc(sx, sy, r, 0, TAU); c.fill();
+    c.globalAlpha = on ? 1 : .35; c.fillStyle = col;
+    if (many && z < 9) { c.fillRect(sx - r * .7, sy - r * .7, r * 1.4, r * 1.4); continue; }
+    c.beginPath(); c.arc(sx, sy, r, 0, TAU); c.fill();
     if (on && z >= 12 && !many) { c.globalAlpha = .9; c.fillStyle = '#fff'; c.beginPath(); c.arc(sx, sy, r * .35, 0, TAU); c.fill(); }
   }
   c.globalAlpha = 1;
@@ -610,7 +612,8 @@ function applyDataset(ds, fit) {
   if (busy()) abort();
   DS = ds;
   U = ds.points.map((p, i) => { const q = proj(p.lo, p.la); return Object.assign({ i, x: q[0], y: q[1], dist: NaN, cross: 0 }, p); });
-  const [minLo, minLa, maxLo, maxLa] = ds.bbox;
+  // fit to the bulk of the points: a nationwide set with Guam or the Aleutians in it would otherwise centre on the ocean
+  const [minLo, minLa, maxLo, maxLa] = ds.fit = trimmedBox(ds.points);
   center = { lat: (minLa + maxLa) / 2, lon: (minLo + maxLo) / 2 };
   user = null; ranked = []; target = null; rankIdx = 0; hideCard();
   // chips only for fields the data actually has
@@ -630,6 +633,12 @@ function applyDataset(ds, fit) {
   scramble($('status'), gridStatus(), 900); $('led').className = 'led';
   updateCoordsIdle();
   renderPanel();
+}
+function trimmedBox(pts) {
+  if (pts.length < 50) { let a = 180, b = 90, c = -180, d = -90; for (const p of pts) { if (p.lo < a) a = p.lo; if (p.la < b) b = p.la; if (p.lo > c) c = p.lo; if (p.la > d) d = p.la; } return [a, b, c, d]; }
+  const lo = pts.map(p => p.lo).sort((x, y) => x - y), la = pts.map(p => p.la).sort((x, y) => x - y);
+  const q = (arr, f) => arr[Math.min(arr.length - 1, Math.max(0, Math.round(f * (arr.length - 1))))];
+  return [q(lo, .02), q(la, .02), q(lo, .98), q(la, .98)];
 }
 function buildLegend(f) {
   const items = [];
@@ -666,6 +675,7 @@ function loadFile(file) {
   file.text().then(text => { if (loadText(text, file.name, { persist: true })) closePanelSoon(); })
     .catch(e => panelStatus('Could not read the file: ' + (e.message || e), true));
 }
+const DEFAULT_FILE = 'campsites-us.geojson';
 function loadSample() {
   const raw = window.SAMPLE_DATA;
   if (!raw) { panelStatus('No sample bundled in this build.', true); return; }
@@ -673,8 +683,16 @@ function loadSample() {
   ds.name = 'Toronto public toilets';
   loadParsed(ds, { sample: true, persist: false });
 }
+function loadDefault() {
+  // the US campsite file sits next to index.html; the Toronto sample is the offline fallback
+  panelStatus('Loading US campsites…');
+  setStatus('LOADING GRID', 'busy');
+  return fetch(DEFAULT_FILE).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text(); })
+    .then(text => { const ds = Parse.parseText(text, DEFAULT_FILE); ds.name = 'US campsites'; loadParsed(ds, { sample: true, persist: false }); })
+    .catch(e => { loadSample(); panelStatus(`Could not load ${DEFAULT_FILE} (${e.message || e}); showing the Toronto sample instead.`); });
+}
 function forgetData() {
-  store.del('dataset').finally(() => { loadSample(); panelStatus('Your dataset was removed from this browser. Back on the Toronto sample.'); });
+  store.del('dataset').finally(() => { panelStatus('Your dataset was removed from this browser.'); loadDefault(); });
 }
 function loadFromURL(url) {
   panelStatus(`Fetching ${url.slice(0, 80)}…`);
@@ -700,10 +718,11 @@ function renderPanel() {
     ['FORMAT', esc(DS.format)],
     ['FIELDS', esc(fields)],
     ['SPAN', span < 1 ? 'single point' : `${fmtDist(span).toLowerCase()} across · centre ${fmtCoord(center.lat, center.lon)}`],
-    ['STORAGE', DS.sample ? 'Bundled sample, not saved' : DS.saved ? 'Saved in this browser' : 'Not saved yet'],
+    ['STORAGE', DS.sample ? 'Default data, not saved' : DS.saved ? 'Saved in this browser' : 'Not saved yet'],
   ];
   $('pnRows').innerHTML = rows.map(([k, v]) => `<b>${k}</b><span>${v}</span>`).join('');
-  $('btnSample').disabled = !!DS.sample;
+  $('btnSample').disabled = !!DS.sample && DS.name === 'US campsites';
+  $('btnToronto').disabled = !!DS.sample && DS.name !== 'US campsites';
   $('btnForget').disabled = !!DS.sample;
 }
 $('chipData').addEventListener('click', () => { SFX.ui(); if ($('panel').hidden) openPanel(); else closePanel(); });
@@ -711,7 +730,8 @@ $('pnClose').addEventListener('click', () => { SFX.ui(); closePanel(); });
 $('panel').addEventListener('click', e => { if (e.target === $('panel')) closePanel(); });
 $('file').addEventListener('change', e => { loadFile(e.target.files && e.target.files[0]); e.target.value = ''; });
 $('drop').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('file').click(); } });
-$('btnSample').addEventListener('click', () => { SFX.ui(); loadSample(); closePanelSoon(); });
+$('btnSample').addEventListener('click', () => { SFX.ui(); loadDefault().then(closePanelSoon); });
+$('btnToronto').addEventListener('click', () => { SFX.ui(); loadSample(); closePanelSoon(); });
 $('btnForget').addEventListener('click', () => { SFX.ui(); forgetData(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('panel').hidden) closePanel(); });
 let dragDepth = 0;
@@ -736,7 +756,7 @@ $('btnAbort').addEventListener('click', abort);
 $('btnPinMode').addEventListener('click', () => { abort(); pinMode = true; stage.classList.add('pin'); $('chipPin').classList.add('on'); $('chipPin').setAttribute('aria-pressed', 'true'); setStatus('TAP THE MAP TO SET POSITION', 'busy'); });
 $('btnSim').addEventListener('click', () => {
   abort();
-  const [minLo, minLa, maxLo, maxLa] = DS.bbox, padLa = Math.max(.01, (maxLa - minLa) * .1), padLo = Math.max(.01, (maxLo - minLo) * .1);
+  const [minLo, minLa, maxLo, maxLa] = DS.fit || DS.bbox, padLa = Math.max(.01, (maxLa - minLa) * .1), padLo = Math.max(.01, (maxLo - minLo) * .1);
   const lat = minLa - padLa + Math.random() * (maxLa - minLa + 2 * padLa), lon = minLo - padLo + Math.random() * (maxLo - minLo + 2 * padLo);
   runWithPosition(lat, lon, 25 + Math.random() * 40, true);
 });
@@ -757,12 +777,12 @@ scramble($('status'), 'LOADING GRID', 600);
 const srcParam = new URLSearchParams(location.search).get('src');
 store.get('dataset').then(saved => {
   if (saved && Array.isArray(saved.points) && saved.points.length) { saved.saved = true; saved.sample = false; saved.notes = saved.notes || []; applyDataset(saved, true); }
-  else loadSample();
-}).catch(() => loadSample()).then(() => {
+  else return loadDefault();
+}).catch(() => loadDefault()).then(() => {
   if (srcParam && /^https?:\/\//i.test(srcParam)) loadFromURL(srcParam);
   else if (!srcParam && DS && DS.sample && !sessionStorage.getItem('loo:hinted')) {
     try { sessionStorage.setItem('loo:hinted', '1'); } catch (e) { /* ignore */ }
-    setTimeout(() => { if (!busy()) setStatus('SAMPLE GRID · TAP DATA FOR YOUR CITY'); }, 2600);
+    setTimeout(() => { if (!busy()) setStatus('DEFAULT GRID · TAP DATA FOR YOUR OWN'); }, 2600);
   }
 });
 let last = now();
