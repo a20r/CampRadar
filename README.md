@@ -1,6 +1,6 @@
-# Loo Runner
+# Camp Radar
 
-Find the closest campsite, toilet, or whatever else you map, in any city. Single-file static site (`index.html`): neon map, "FIND CLOSEST" search using device location, Google Maps walking directions.
+Find the closest campsite, or whatever else you map, anywhere. (Formerly Loo Runner, a Toronto public-toilet finder.) Single-file static site (`index.html`): neon map, "FIND CLOSEST" search using device location, Google Maps walking directions.
 
 Bring your own data: tap DATA and drop in a GeoJSON, JSON, CSV, GPX or KML file. Points are pulled out of whatever geometry is inside (polygons and lines are reduced to a representative point), and name, open/closed status, access, hours, address and website are detected from the properties. The file is parsed and stored in your browser (IndexedDB); nothing is sent to a server, so the site stays fully static. A `?src=https://…/points.geojson` link loads a file from the web and keeps it locally too.
 

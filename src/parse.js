@@ -1,4 +1,4 @@
-/* Loo Runner data parser: turns whatever the user drops in (GeoJSON, loose JSON,
+/* Camp Radar data parser: turns whatever the user drops in (GeoJSON, loose JSON,
    Overpass JSON, CSV/TSV, GPX, KML) into a flat list of points with a small
    normalised schema. Runs in the browser and under node (for tests). */
 (function (root) {
